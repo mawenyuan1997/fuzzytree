@@ -101,3 +101,17 @@ def s_shaped_membership(universe, a, b):
     s_func[idx] = 1 - 2 * ((universe[idx] - b) / (b - a)) ** 2
 
     return s_func
+
+
+class LeastSquaresFunction:
+    """
+    Function class used in a gradient boosting regressor
+    (Friedman et al., 1998; Friedman 2001).
+    """
+
+    def loss(self, y, y_pred):
+        """Lost function is a Least-square equation: L(y, F) = (y - F) ^ 2 / 2"""
+        return 0.5 * np.power((y - y_pred), 2)
+
+    def gradient(self, y, y_pred):
+        return -(y - y_pred)

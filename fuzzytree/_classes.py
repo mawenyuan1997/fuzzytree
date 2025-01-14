@@ -7,14 +7,18 @@ from abc import ABCMeta, abstractmethod
 
 import numpy as np
 from sklearn.base import BaseEstimator, ClassifierMixin, is_classifier, RegressorMixin
+from sklearn.metrics import mean_squared_error
 from sklearn.utils.multiclass import check_classification_targets
 from sklearn.utils.validation import check_X_y, check_is_fitted, _check_sample_weight
 
 from . import _criterion
 from ._fuzzy_tree import FuzzyTreeBuilder, FuzzyTree, FuzzyRegressionTree
 from ._splitter import Splitter
+from sklearn.utils.extmath import softmax
 
 __all__ = ["FuzzyDecisionTreeClassifier"]
+
+from ._utils import LeastSquaresFunction
 
 # =============================================================================
 # Types and constants
@@ -385,6 +389,7 @@ class FuzzyDecisionTreeClassifier(ClassifierMixin, BaseFuzzyDecisionTree):
             "binary_only": False
         }
 
+
 class FuzzyDecisionTreeRegressor(RegressorMixin, BaseFuzzyDecisionTree):
     """A fuzzy decision tree regressor.
 
@@ -435,6 +440,7 @@ class FuzzyDecisionTreeRegressor(RegressorMixin, BaseFuzzyDecisionTree):
             ``help(fuzzytree._fuzzy_tree.FuzzyTree)`` for attributes of Tree object and
             for basic usage of these attributes.
     """
+
     def __init__(self,
                  fuzziness=0.8,
                  criterion='variance',
@@ -462,7 +468,6 @@ class FuzzyDecisionTreeRegressor(RegressorMixin, BaseFuzzyDecisionTree):
 
         _, sample_weight = self._get_sample_weight(X)
 
-
         predictions = self.tree_.predict(X, sample_weight)
         return predictions.flatten()
 
@@ -483,3 +488,66 @@ class FuzzyDecisionTreeRegressor(RegressorMixin, BaseFuzzyDecisionTree):
             **super()._get_tags(),
             "binary_only": False
         }
+
+
+class FuzzyGBDT:
+    def __init__(self, learning_rate, n_estimators, fuzzy_tree_params={}):
+        self.learning_rate = learning_rate
+        self.n_estimators = n_estimators
+        self._loss_func = LeastSquaresFunction()
+        self._estimators = []
+        for i in range(self.n_estimators):
+            estimator = FuzzyDecisionTreeRegressor(**fuzzy_tree_params)
+            self._estimators.append(estimator)
+
+    def fit(self, X_train, y_train):
+        """
+        Fit the fuzzy gradient boosting model.
+
+        Parameters
+        ----------
+        X_train : array-like of shape (n_samples, n_features)
+            Input instances to be predicted.
+
+        y_train : array-like of shape (n_samples,)
+            Target values (strings or integers in classification, real numbers
+            in regression)
+        """
+        # Use the first tree to fit the first estimator, and then use it
+        # to predict values F_0(x).
+        self._estimators[0].fit(X_train, y_train)
+        y_pred = self._estimators[0].predict(X_train)
+        print("0-th estimator produces error: {}".format(mean_squared_error(y_train, y_pred)))
+
+        # Then use the other tree iteratively to fit the other estimators by the
+        # residuals of the last predictions. The first set of residuals is the
+        # true values minus the values F_0(x).
+        for i in range(1, self.n_estimators):
+            gradient = self._loss_func.gradient(y_train, y_pred)
+            self._estimators[i].fit(X_train, gradient)
+            y_pred -= np.multiply(self.learning_rate, self._estimators[i].predict(X_train))
+            print("{}-th estimator produces error: {}".format(i, mean_squared_error(y_train, y_pred)))
+
+    def predict(self, X):
+        """
+        Predict class for X.
+
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            The input samples.
+
+        Returns
+        -------
+        y_pred : ndarray of shape (n_samples,)
+            The predicted values.
+        """
+        # Use the first fitted estimator to predict values F_0(x).
+        y_pred = self._estimators[0].predict(X)
+
+        # Then use the other fitting estimators to iteratively predict
+        # the residuals and add them up to the values F_0(x).
+        for i in range(1, self.n_estimators):
+            y_pred -= np.multiply(self.learning_rate, self._estimators[i].predict(X))
+
+        return y_pred
